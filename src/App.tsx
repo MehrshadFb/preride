@@ -3,8 +3,7 @@ import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
 import './App.css';
 import sampleRoute from './data/sampleRoute.geojson';
-import { useMultiPointWindData } from './hooks/useWindData';
-import type { HourlyWindEntry } from './hooks/useWindData';
+import { useMultiPointWindData, type HourlyWindEntry } from './hooks/useWindData';
 import {
   loadArrowPoint, pooled, buildGridPoints, buildArrowsGeoJSON,
 } from './hooks/windArrows';
@@ -46,7 +45,7 @@ function sampleRoutePoints(coords: number[][], n: number): { lat: number; lon: n
 // ─── Arrow grid config ─────────────────────────────────────────────────────
 const ARROW_COLS = 6;   // per-viewport grid columns
 const ARROW_ROWS = 4;   // per-viewport grid rows
-const ARROW_CONCURRENCY = 6;   // max simultaneous Open-Meteo requests
+const ARROW_CONCURRENCY = 3;   // max simultaneous Open-Meteo requests
 
 // ─── Arrow icon ───────────────────────────────────────────────────────────────
 /**
@@ -197,8 +196,8 @@ function nearestSampleIndex(
  *
  * Scores are normalised to 0..1 across all segments for colour-mapping.
  */
-const CLIMB_K = 80;
-const GRADE_CLAMP = 0.2; // ±20% max grade before clamping
+const CLIMB_K = 600;
+const GRADE_CLAMP = 0.5; // ±20% max grade before clamping
 const OFFSET_METERS = 5;
 
 // Simple flat-earth approximation for small offsets
@@ -222,6 +221,7 @@ function buildSegmentCollection(
   hourIndex: number,
   elevations: number[],        // one elevation (m) per route point; [] = unavailable
   includeElevation: boolean,
+  includeWind: boolean,
 ): GeoJSON.FeatureCollection {
   if (coords.length < 2) return { type: 'FeatureCollection', features: [] };
 
@@ -281,7 +281,7 @@ function buildSegmentCollection(
       }
     }
 
-    const sufferRaw = headwindRaw + climbPenalty;
+    const sufferRaw = (includeWind ? headwindRaw : 0) + climbPenalty;
 
     // Apply offset if this segment is part of a bidirectional path
     const edgeKey = getEdgeKey(coords[i], coords[i + 1]);
@@ -341,12 +341,27 @@ function App() {
   const [windOn, setWindOn] = useState(true);
   const [elevationOn, setElevationOn] = useState(true);
   const [mapReady, setMapReady] = useState(false);
-  const [hourIndex, setHourIndex] = useState(0);
 
 
   // Active route coordinates (default = bundled sample route; replaced on GPX upload)
   const [routeCoords, setRouteCoords] = useState<number[][]>(ROUTE_COORDS);
   const [gpxError, setGpxError] = useState<string | null>(null);
+
+  // Date/Time state (YYYY-MM-DD), default to today
+  const [selectedDate, setSelectedDate] = useState(() => new Date().toISOString().split('T')[0]);
+
+  // Data state: only update this when "Set Date" is clicked (Manual Fetch)
+  const [fetchedDate, setFetchedDate] = useState(selectedDate);
+
+  const handleCommitDate = useCallback(() => {
+    setFetchedDate(selectedDate);
+  }, [selectedDate]);
+
+  // Current hour of wind data (0-23), default to nearest next hour
+  const [hourIndex, setHourIndex] = useState(() => {
+    const now = new Date();
+    return Math.min(23, now.getHours() + 1);
+  });
 
   // Debug hover state
   const [hoveredSegment, setHoveredSegment] = useState<{
@@ -365,10 +380,9 @@ function App() {
   );
 
   // Multi-point wind data: N samples fetched in parallel, cached per-point
-  const { allData, loading: windLoading } = useMultiPointWindData(samplePoints);
+  // Refetches when fetchedDate changes (Manual Fetch)
+  const { allData, loading: windLoading } = useMultiPointWindData(samplePoints, fetchedDate);
 
-  // For WindInfoPanel: midpoint sample (REMOVED)
-  const midIdx = Math.floor(samplePoints.length / 2);
 
   // Refs used inside event handlers (avoids stale closures)
   const windOnRef = useRef(windOn);
@@ -443,7 +457,11 @@ function App() {
           type: 'geojson',
           // All-zero scores initially; recolor effect fills in once data arrives.
           // Elevation not yet available at init time — sampled in a separate effect.
-          data: buildSegmentCollection(routeCoords, samplePoints, [], 0, [], false),
+          // Elevation not yet available at init time — sampled in a separate effect.
+          data: buildSegmentCollection(
+            routeCoords, samplePoints, [], 0, [], false,
+            windOnRef.current
+          ),
         });
 
         m.addLayer({
@@ -588,7 +606,7 @@ function App() {
         src.setData(
           buildSegmentCollection(
             routeCoords, samplePoints, allData, hourIndex,
-            elevs, elevationOn,
+            elevs, elevationOn, windOn,
           ),
         );
       }
@@ -617,10 +635,13 @@ function App() {
     src.setData(
       buildSegmentCollection(
         routeCoords, samplePoints, allData, hourIndex,
-        cachedElevationsRef.current, elevationOn,
+        cachedElevationsRef.current, elevationOn, windOn,
       ),
     );
-  }, [mapReady, allData, hourIndex, routeCoords, samplePoints, elevationOn]);
+  }, [
+    mapReady, allData, hourIndex, routeCoords, samplePoints,
+    elevationOn, windOn
+  ]);
 
   // ── Auto-zoom when route changes (GPX upload) ─────────────────────────────
   useEffect(() => {
@@ -786,18 +807,21 @@ function App() {
         <ToggleRow
           label="Elevation"
           active={elevationOn}
-          activeColor="#0d9488"
-          labelColor="#2dd4bf"
+          activeColor="#f97316"
+          labelColor="#fb923c"
           onClick={() => setElevationOn((p) => !p)}
-          title={elevationOn ? 'Disable elevation difficulty' : 'Enable elevation difficulty'}
+          title={elevationOn ? 'Ignore elevation' : 'Include elevation in scoring'}
           icon={
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
-              stroke={elevationOn ? '#2dd4bf' : '#94a3b8'} strokeWidth="2"
+              stroke={elevationOn ? '#fb923c' : '#94a3b8'} strokeWidth="2"
               strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+              <path d="M3 20 L21 20 M3 20 L9 10 L15 16 L21 6" />
             </svg>
           }
         />
+
+        {/* Separator */}
+        <div style={{ height: '1px', background: 'rgba(255,255,255,0.1)', margin: '4px 0' }} />
 
         {/* GPX Upload */}
         <label
@@ -887,8 +911,12 @@ function App() {
 
 
       {/* ── Time Slider (bottom-center) ───────────────────────────────── */}
+
       <TimeSlider
-        hourlyData={allData[midIdx] ?? []}
+        date={selectedDate}
+        setDate={setSelectedDate}
+        onCommitDate={handleCommitDate}
+        hourlyData={allData[Math.floor(samplePoints.length / 2)] ?? []}
         hourIndex={hourIndex}
         onChange={setHourIndex}
         loading={windLoading}
@@ -908,9 +936,6 @@ function App() {
         }}
       >
         <h4 style={{ margin: '0 0 4px 0', fontSize: '14px', fontWeight: 600 }}>Route Difficulty</h4>
-        <p style={{ margin: '0 0 10px 0', fontSize: '11px', color: '#64748b', fontWeight: 400 }}>
-          {elevationOn ? 'wind + climb penalty' : 'wind only'}
-        </p>
         <div style={{
           height: '12px', width: '100%', borderRadius: '6px',
           background: 'linear-gradient(to right, #22c55e, #eab308, #ef4444)',
@@ -918,16 +943,6 @@ function App() {
         }} />
         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: '#94a3b8', fontWeight: 500 }}>
           <span>Easier</span><span>Harder</span>
-        </div>
-
-        {/* Forward/Reverse Legend */}
-        <div style={{
-          marginTop: '8px',
-          borderTop: '1px solid rgba(255,255,255,0.1)',
-          paddingTop: '6px',
-          fontSize: '10px', color: '#94a3b8', textAlign: 'center'
-        }}>
-          Parallel lines = Fwd / Rev
         </div>
       </div>
     </>
