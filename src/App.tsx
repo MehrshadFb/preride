@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
 import './App.css';
-import sampleRoute from './data/sampleRoute.geojson';
 import { useMultiPointWindData, type HourlyWindEntry } from './hooks/useWindData';
 import {
   loadArrowPoint, pooled, buildGridPoints, buildArrowsGeoJSON,
@@ -13,6 +12,8 @@ import { sampleElevations } from './hooks/elevationCache';
 import TimeSlider from './components/TimeSlider';
 import RouteDebugPanel from './components/RouteDebugPanel';
 import type { DebugSegmentStats } from './components/RouteDebugPanel';
+import SettingsPanel from './components/SettingsPanel';
+import UploadPanel from './components/UploadPanel';
 
 
 // ─── Map layer IDs ────────────────────────────────────────────────────────────
@@ -20,17 +21,10 @@ const DEM_SOURCE_ID = 'mapbox-dem';
 const SKY_LAYER_ID = 'sky';
 const ROUTE_SOURCE_ID = 'route';
 const ROUTE_LAYER_ID = 'route-line';
+const ROUTE_OUTLINE_LAYER_ID = 'route-outline';
 const WIND_ARROWS_SOURCE = 'wind-arrows';
 const WIND_ARROWS_LAYER = 'wind-arrows-layer';
 const ARROW_IMAGE_ID = 'wind-arrow-icon';
-
-// ─── Route geometry (extracted once from static import) ──────────────────────
-const ROUTE_COORDS: number[][] =
-  (
-    (sampleRoute as GeoJSON.FeatureCollection).features.find(
-      (f) => f.geometry.type === 'LineString',
-    )?.geometry as GeoJSON.LineString | undefined
-  )?.coordinates ?? [];
 
 /** Pick n evenly-spaced points along the route for wind sampling. */
 function sampleRoutePoints(coords: number[][], n: number): { lat: number; lon: number }[] {
@@ -64,8 +58,7 @@ function createArrowImage(size = 40): { width: number; height: number; data: Uin
   ctx.shadowColor = 'rgba(0,0,0,0.6)';
   ctx.shadowBlur = 4;
 
-  // Solid sky-blue
-  ctx.fillStyle = '#7dd3fc'; // sky-blue
+  ctx.fillStyle = '#e64a6cff'; // sky-blue
 
   // Arrow shape: head (wide triangle) + tail (narrow shaft)
   ctx.beginPath();
@@ -341,10 +334,14 @@ function App() {
   const [windOn, setWindOn] = useState(true);
   const [elevationOn, setElevationOn] = useState(true);
   const [mapReady, setMapReady] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
 
+  // Start/Finish markers
+  const startMarkerRef = useRef<mapboxgl.Marker | null>(null);
+  const finishMarkerRef = useRef<mapboxgl.Marker | null>(null);
 
-  // Active route coordinates (default = bundled sample route; replaced on GPX upload)
-  const [routeCoords, setRouteCoords] = useState<number[][]>(ROUTE_COORDS);
+  // Active route coordinates (starts empty; loaded from default GPX, then replaced on upload)
+  const [routeCoords, setRouteCoords] = useState<number[][]>([]);
   const [gpxError, setGpxError] = useState<string | null>(null);
 
   // Date/Time state (YYYY-MM-DD), default to today
@@ -394,33 +391,172 @@ function App() {
   useEffect(() => { elevationOnRef.current = elevationOn; }, [elevationOn]);
   useEffect(() => { hourIndexRef.current = hourIndex; }, [hourIndex]);
 
+  // Compute route stats for the UI
+  const distanceKm = useMemo(() => {
+    let dist = 0;
+    if (routeCoords.length > 1) {
+      for (let i = 0; i < routeCoords.length - 1; i++) {
+        const [lon1, lat1] = routeCoords[i];
+        const [lon2, lat2] = routeCoords[i + 1];
+        dist += haversineMeters(lat1, lon1, lat2, lon2);
+      }
+    }
+    return dist / 1000;
+  }, [routeCoords]);
+
+  // Elevation gain calculation needs access to elevations.
+  // We can add a state for it or compute it when sampleElevations runs.
+  const [totalAscent, setTotalAscent] = useState(0);
+
+  useEffect(() => {
+    // Re-calculate ascent whenever route changes (and elevations are fetched)
+    // This will be triggered by sampleElevations basically
+  }, [routeCoords]);
+
   // ── Async function: fetch missing arrow points and update source ───────────────────────
   const refreshArrows = useCallback(async () => {
     const m = map.current;
-    if (!m || !windOnRef.current) return;
+    const src = m?.getSource(WIND_ARROWS_SOURCE) as mapboxgl.GeoJSONSource | undefined;
+    if (!m || !windOnRef.current || !src) return;
+
     const bounds = m.getBounds();
     if (!bounds) return;
 
     const pts = buildGridPoints(bounds, ARROW_COLS, ARROW_ROWS);
     arrowGridRef.current = pts;
+    const grid = arrowGridRef.current;
 
-    // Fetch only points not yet in the arrow cache (with concurrency limiter)
-    // Use the exported loadArrowPoint which self-checks the cache
+    // 1. Fetch data for visible grid points (cached by lat/lon/date)
     await pooled(
-      pts.map((p) => () => loadArrowPoint(p.lat, p.lng)),
-      ARROW_CONCURRENCY,
+      grid.map((p) => () => loadArrowPoint(p.lat, p.lng, fetchedDate)),
+      ARROW_CONCURRENCY
     );
 
-    const src = m.getSource(WIND_ARROWS_SOURCE) as mapboxgl.GeoJSONSource | undefined;
-    if (!src) return;
-    src.setData(buildArrowsGeoJSON(pts, hourIndexRef.current));
+    // 2. Build GeoJSON from cache (using fetchedDate)
+    const geojson = buildArrowsGeoJSON(grid, fetchedDate, hourIndexRef.current);
+    src.setData(geojson);
+
     if (m.getLayer(WIND_ARROWS_LAYER)) {
       m.setLayoutProperty(WIND_ARROWS_LAYER, 'visibility', 'visible');
     }
-  }, []);
+  }, [windOn, fetchedDate]); // Added fetchedDate to trigger refresh
+
+  const [mapStyle, setMapStyle] = useState<'satellite' | 'streets'>('satellite');
+
+  // ── Layer Initialisation (reusable for style switches) ────────────────────
+  const initializeLayers = useCallback((m: mapboxgl.Map) => {
+    // 1. Arrow Icon
+    if (!m.hasImage(ARROW_IMAGE_ID)) {
+      m.addImage(ARROW_IMAGE_ID, createArrowImage(40));
+    }
+
+    // 2. Route Source
+    if (!m.getSource(ROUTE_SOURCE_ID)) {
+      m.addSource(ROUTE_SOURCE_ID, {
+        type: 'geojson',
+        data: buildSegmentCollection(
+          routeCoords, samplePoints, [], 0, [], false,
+          windOnRef.current
+        ),
+      });
+    }
+
+    // 3. Route Outline Layer (white, appears below main line)
+    if (!m.getLayer(ROUTE_OUTLINE_LAYER_ID)) {
+      m.addLayer({
+        id: ROUTE_OUTLINE_LAYER_ID,
+        type: 'line',
+        source: ROUTE_SOURCE_ID,
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: {
+          'line-color': '#ffffff',
+          'line-width': 9,
+          'line-opacity': 0.9,
+        },
+      });
+    }
+
+    // 4. Route Main Line
+    if (!m.getLayer(ROUTE_LAYER_ID)) {
+      m.addLayer({
+        id: ROUTE_LAYER_ID,
+        type: 'line',
+        source: ROUTE_SOURCE_ID,
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: {
+          'line-color': [
+            'interpolate', ['linear'], ['get', 'score'],
+            0, '#22c55e',
+            0.5, '#eab308',
+            1, '#ef4444',
+          ],
+          'line-width': 5,
+          'line-opacity': 0.9,
+        },
+      });
+    }
+  }, [routeCoords, samplePoints]);
 
   // Keep ref up to date so event handlers always call the latest version
   refreshArrowsRef.current = refreshArrows;
+
+  // ── Default GPX route load ────────────────────────────────────────────────
+  useEffect(() => {
+    fetch('/default_route.gpx')
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status} loading default_route.gpx`);
+        return res.text();
+      })
+      .then((text) => {
+        const coords = parseGpx(text);
+        setRouteCoords(coords);
+      })
+      .catch((err) => {
+        console.error('[DefaultRoute] Failed to load default_route.gpx:', err);
+        // Fall back to empty state — no silent fallback to old route
+        setRouteCoords([]);
+      });
+  }, []);
+
+  // ── Start/Finish markers ──────────────────────────────────────────────────
+  useEffect(() => {
+    const m = map.current;
+    if (!m || !mapReady) return;
+
+    // Clean up old markers
+    startMarkerRef.current?.remove();
+    finishMarkerRef.current?.remove();
+    startMarkerRef.current = null;
+    finishMarkerRef.current = null;
+
+    if (routeCoords.length < 2) return;
+
+    const makeMarkerEl = (color: string, label: string) => {
+      const el = document.createElement('div');
+      el.style.cssText = `
+        background: ${color};
+        border: 2.5px solid #ffffff;
+        border-radius: 50% 50% 50% 0;
+        transform: rotate(-45deg);
+        width: 22px; height: 22px;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.5);
+        cursor: default;
+      `;
+      el.title = label;
+      return el;
+    };
+
+    const [startLng, startLat] = routeCoords[0];
+    const [endLng, endLat] = routeCoords[routeCoords.length - 1];
+
+    startMarkerRef.current = new mapboxgl.Marker({ element: makeMarkerEl('#22c55e', 'Start'), anchor: 'bottom' })
+      .setLngLat([startLng, startLat])
+      .addTo(m);
+
+    finishMarkerRef.current = new mapboxgl.Marker({ element: makeMarkerEl('#ef4444', 'Finish'), anchor: 'bottom' })
+      .setLngLat([endLng, endLat])
+      .addTo(m);
+  }, [mapReady, routeCoords]);
 
   // ── Map initialisation ────────────────────────────────────────────────────
   useEffect(() => {
@@ -438,7 +574,7 @@ function App() {
 
       map.current = new mapboxgl.Map({
         container: mapContainer.current,
-        style: 'mapbox://styles/mapbox/satellite-streets-v12',
+        style: 'mapbox://styles/mapbox/satellite-streets-v12', // Start with satellite
         center: [-79.3832, 43.6532],
         zoom: 10,
         pitch: 45,
@@ -448,39 +584,7 @@ function App() {
 
       map.current.on('load', () => {
         const m = map.current!;
-
-        // Register arrow icon (plain color, no SDF needed)
-        m.addImage(ARROW_IMAGE_ID, createArrowImage(40));
-
-        // ── Route: add source using pre-extracted ROUTE_COORDS ────────────
-        m.addSource(ROUTE_SOURCE_ID, {
-          type: 'geojson',
-          // All-zero scores initially; recolor effect fills in once data arrives.
-          // Elevation not yet available at init time — sampled in a separate effect.
-          // Elevation not yet available at init time — sampled in a separate effect.
-          data: buildSegmentCollection(
-            routeCoords, samplePoints, [], 0, [], false,
-            windOnRef.current
-          ),
-        });
-
-        m.addLayer({
-          id: ROUTE_LAYER_ID,
-          type: 'line',
-          source: ROUTE_SOURCE_ID,
-          layout: { 'line-join': 'round', 'line-cap': 'round' },
-          paint: {
-            'line-color': [
-              'interpolate', ['linear'], ['get', 'score'],
-              0, '#22c55e',
-              0.5, '#eab308',
-              1, '#ef4444',
-            ],
-            'line-width': 5,
-            'line-opacity': 0.9,
-          },
-        });
-
+        initializeLayers(m);
         setMapReady(true);
 
         // ── Debug hover on route line ─────────────────────────────────────────
@@ -524,7 +628,34 @@ function App() {
       map.current?.remove();
       map.current = null;
     };
-  }, []);
+  }, []); // Run once
+
+  // ── Style Switching ───────────────────────────────────────────────────────
+  const handleSetMapStyle = (style: 'satellite' | 'streets') => {
+    const m = map.current;
+    if (!m) return;
+    if (style === mapStyle) return;
+
+    setMapStyle(style);
+    const url = style === 'satellite'
+      ? 'mapbox://styles/mapbox/satellite-streets-v12'
+      : 'mapbox://styles/mapbox/streets-v12';
+
+    m.setStyle(url);
+    m.once('style.load', () => {
+      // Re-add layers after style switch
+      initializeLayers(m);
+      // Trigger terrain/wind refresh by toggling state or relying on effects
+      // Actually, effects will re-run if we depend on mapStyle or just because source is missing.
+      // But explicit re-enable helps.
+      if (terrainOn) {
+        // terrain source needs re-adding?
+        // simple enableTerrain() check should work if invoked
+        // Effect [mapReady, terrainOn] might not re-run if those didn't change.
+        // So we add mapStyle to that effect dependency.
+      }
+    });
+  };
 
   // ── Terrain ───────────────────────────────────────────────────────────────
   const enableTerrain = useCallback(() => {
@@ -566,7 +697,7 @@ function App() {
   useEffect(() => {
     if (!mapReady) return;
     if (terrainOn) enableTerrain(); else disableTerrain();
-  }, [mapReady, terrainOn, enableTerrain, disableTerrain]);
+  }, [mapReady, terrainOn, enableTerrain, disableTerrain, mapStyle]); // Re-run on style change
 
   // ── Sample elevations after map is idle (terrain tiles fully loaded) ─────
   // BUG FIX: queryTerrainElevation returns 0/null until the DEM raster tiles
@@ -580,7 +711,7 @@ function App() {
 
     // Step 2: DEM source guard
     if (!m.getSource(DEM_SOURCE_ID)) {
-      console.error('[Elevation] DEM source missing — attempting to add it');
+      // console.error('[Elevation] DEM source missing — attempting to add it');
       try {
         m.addSource(DEM_SOURCE_ID, {
           type: 'raster-dem',
@@ -593,7 +724,7 @@ function App() {
 
     // Ensure terrain is set so DEM tiles start loading
     if (!m.getTerrain()) {
-      console.warn('[Elevation] Terrain not active — forcing setTerrain for elevation sampling');
+      // console.warn('[Elevation] Terrain not active — forcing setTerrain for elevation sampling');
       m.setTerrain({ source: DEM_SOURCE_ID, exaggeration: 1 });
     }
 
@@ -603,6 +734,14 @@ function App() {
       // Force recolor with fresh elevations
       const src = m.getSource(ROUTE_SOURCE_ID) as mapboxgl.GeoJSONSource | undefined;
       if (src) {
+        // Calculate total ascent
+        let ascent = 0;
+        for (let i = 0; i < elevs.length - 1; i++) {
+          const diff = elevs[i + 1] - elevs[i];
+          if (diff > 0) ascent += diff;
+        }
+        setTotalAscent(ascent);
+
         src.setData(
           buildSegmentCollection(
             routeCoords, samplePoints, allData, hourIndex,
@@ -624,7 +763,7 @@ function App() {
       m.off('idle', doSample);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mapReady, routeCoords, terrainOn]); // terrainOn: re-sample after terrain toggled
+  }, [mapReady, routeCoords, terrainOn, mapStyle]); // terrainOn: re-sample after terrain toggled
 
   // ── Recolor route on wind data, hour, route change, or elevation toggle ──
   useEffect(() => {
@@ -640,7 +779,7 @@ function App() {
     );
   }, [
     mapReady, allData, hourIndex, routeCoords, samplePoints,
-    elevationOn, windOn
+    elevationOn, windOn, mapStyle // ensure persistence
   ]);
 
   // ── Auto-zoom when route changes (GPX upload) ─────────────────────────────
@@ -700,7 +839,7 @@ function App() {
 
     // Fetch + render for current viewport
     void refreshArrows();
-  }, [mapReady, windOn, refreshArrows]);
+  }, [mapReady, windOn, refreshArrows, mapStyle]); // Re-add layer if lost on style switch
 
   // ── Slider change: rebuild from cache (no network) ────────────────────────
   useEffect(() => {
@@ -708,14 +847,15 @@ function App() {
     if (!m || !mapReady || !windOn || arrowGridRef.current.length === 0) return;
     const src = m.getSource(WIND_ARROWS_SOURCE) as mapboxgl.GeoJSONSource | undefined;
     if (!src) return;
-    src.setData(buildArrowsGeoJSON(arrowGridRef.current, hourIndex));
-  }, [mapReady, windOn, hourIndex]);
+    src.setData(buildArrowsGeoJSON(arrowGridRef.current, fetchedDate, hourIndex));
+  }, [mapReady, windOn, hourIndex, fetchedDate, mapStyle]);
 
   // ── GPX upload ────────────────────────────────────────────────────────────
   const handleGpxUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     e.target.value = ''; // allow re-upload of the same file
+    setSelectedFile(file); // Store the file object
     const reader = new FileReader();
     reader.onload = (ev) => {
       try {
@@ -760,158 +900,33 @@ function App() {
         style={{ width: '100%', height: '100%' }}
       />
 
+      {/* ─── Bottom-Left: Settings Panel ─── */}
+      <SettingsPanel
+        terrainOn={terrainOn}
+        setTerrainOn={setTerrainOn}
+        windOn={windOn}
+        setWindOn={setWindOn}
+        elevationOn={elevationOn}
+        setElevationOn={setElevationOn}
+        mapStyle={mapStyle}
+        setMapStyle={handleSetMapStyle}
+      />
 
-      {/* ── Controls panel (top-left) ─────────────────────────────────── */}
-      <div
-        style={{
-          position: 'absolute', top: '16px', left: '16px', zIndex: 10,
-          display: 'flex', flexDirection: 'column', gap: '8px',
-          fontFamily: "'Inter', sans-serif",
-        }}
-      >
-        {/* Terrain toggle */}
-        <ToggleRow
-          label="Terrain"
-          active={terrainOn}
-          activeColor="#10b981"
-          labelColor="#34d399"
-          onClick={() => setTerrainOn((p) => !p)}
-          title={terrainOn ? 'Disable 3D terrain' : 'Enable 3D terrain'}
-          icon={
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
-              stroke={terrainOn ? '#34d399' : '#94a3b8'} strokeWidth="2"
-              strokeLinecap="round" strokeLinejoin="round">
-              <polygon points="3 20 9 4 15 14 19 9 23 20 3 20" />
-            </svg>
-          }
-        />
+      {/* ─── Top-Right: Upload Panel ─── */}
+      <UploadPanel
+        onUpload={handleGpxUpload}
+        selectedFile={selectedFile}
+        distanceKm={distanceKm}
+        elevationGain={totalAscent}
+        selectedDate={selectedDate}
+        gpxError={gpxError}
+        onZoomToRoute={handleZoomToRoute}
+      />
 
-        {/* Wind toggle */}
-        <ToggleRow
-          label="Wind"
-          active={windOn}
-          activeColor="#3b82f6"
-          labelColor="#60a5fa"
-          onClick={() => setWindOn((p) => !p)}
-          title={windOn ? 'Hide wind arrows' : 'Show wind arrows'}
-          icon={
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
-              stroke={windOn ? '#60a5fa' : '#94a3b8'} strokeWidth="2"
-              strokeLinecap="round" strokeLinejoin="round">
-              <path d="M9.59 4.59A2 2 0 1 1 11 8H2m10.59 11.41A2 2 0 1 0 14 16H2m15.73-8.27A2.5 2.5 0 1 1 19.5 12H2" />
-            </svg>
-          }
-        />
-
-        {/* Elevation toggle */}
-        <ToggleRow
-          label="Elevation"
-          active={elevationOn}
-          activeColor="#f97316"
-          labelColor="#fb923c"
-          onClick={() => setElevationOn((p) => !p)}
-          title={elevationOn ? 'Ignore elevation' : 'Include elevation in scoring'}
-          icon={
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
-              stroke={elevationOn ? '#fb923c' : '#94a3b8'} strokeWidth="2"
-              strokeLinecap="round" strokeLinejoin="round">
-              <path d="M3 20 L21 20 M3 20 L9 10 L15 16 L21 6" />
-            </svg>
-          }
-        />
-
-        {/* Separator */}
-        <div style={{ height: '1px', background: 'rgba(255,255,255,0.1)', margin: '4px 0' }} />
-
-        {/* GPX Upload */}
-        <label
-          htmlFor="gpx-upload"
-          style={{
-            background: 'rgba(15, 15, 25, 0.82)',
-            backdropFilter: 'blur(10px)',
-            border: '1px solid rgba(167,139,250,0.4)',
-            borderRadius: '12px',
-            padding: '10px 16px',
-            display: 'flex', alignItems: 'center', gap: '8px',
-            boxShadow: '0 4px 20px rgba(0,0,0,0.4)',
-            cursor: 'pointer',
-            color: '#a78bfa', fontSize: '13px', fontWeight: 600,
-            letterSpacing: '0.02em',
-            fontFamily: "'Inter', sans-serif",
-            transition: 'background 0.2s',
-          }}
-          onMouseEnter={(e) => { (e.currentTarget as HTMLLabelElement).style.background = 'rgba(167,139,250,0.12)'; }}
-          onMouseLeave={(e) => { (e.currentTarget as HTMLLabelElement).style.background = 'rgba(15, 15, 25, 0.82)'; }}
-        >
-          <input
-            id="gpx-upload"
-            type="file"
-            accept=".gpx,application/gpx+xml,text/xml"
-            style={{ display: 'none' }}
-            onChange={handleGpxUpload}
-          />
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
-            stroke="#a78bfa" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-            <polyline points="17 8 12 3 7 8" />
-            <line x1="12" y1="3" x2="12" y2="15" />
-          </svg>
-          Upload GPX
-        </label>
-
-        {/* GPX parse error */}
-        {gpxError && (
-          <div style={{
-            background: 'rgba(239,68,68,0.15)',
-            border: '1px solid rgba(239,68,68,0.4)',
-            borderRadius: '10px',
-            padding: '8px 12px',
-            fontSize: '12px',
-            color: '#fca5a5',
-            fontFamily: "'Inter', sans-serif",
-            maxWidth: '200px',
-            lineHeight: '1.4',
-          }}>
-            ⚠ {gpxError}
-          </div>
-        )}
-
-        {/* Zoom to Route */}
-        <button
-          id="zoom-to-route"
-          onClick={handleZoomToRoute}
-          style={{
-            background: 'rgba(15, 15, 25, 0.82)',
-            backdropFilter: 'blur(10px)',
-            border: '1px solid rgba(249,115,22,0.45)',
-            borderRadius: '12px',
-            padding: '10px 16px',
-            display: 'flex', alignItems: 'center', gap: '8px',
-            boxShadow: '0 4px 20px rgba(0,0,0,0.4)',
-            cursor: 'pointer',
-            color: '#f97316', fontSize: '13px', fontWeight: 600,
-            letterSpacing: '0.02em',
-            fontFamily: "'Inter', sans-serif",
-            transition: 'background 0.2s',
-          }}
-          onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'rgba(249,115,22,0.15)'; }}
-          onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'rgba(15, 15, 25, 0.82)'; }}
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
-            stroke="#f97316" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M3 12h18M3 12l4-4M3 12l4 4" />
-          </svg>
-          Zoom to Route
-        </button>
-      </div>
-
-      {/* ── Route Debug Panel (mouse-following) ────────────────────────── */}
+      {/* ─── Route Debug Panel (mouse-following) ─── */}
       <RouteDebugPanel stats={hoveredSegment?.stats ?? null} mousePos={hoveredSegment?.mousePos ?? null} />
 
-
-
-      {/* ── Time Slider (bottom-center) ───────────────────────────────── */}
-
+      {/* ─── Bottom-Center: Time Slider ─── */}
       <TimeSlider
         date={selectedDate}
         setDate={setSelectedDate}
@@ -922,15 +937,14 @@ function App() {
         loading={windLoading}
       />
 
-      {/* ── Legend (bottom-right) ─────────────────────────────────────── */}
+      {/* ─── Legend (bottom-right) ─── */}
       <div
         style={{
           position: 'absolute', bottom: '24px', right: '24px', zIndex: 10,
-          background: 'rgba(15, 15, 25, 0.9)',
+          background: 'rgba(15, 15, 25, 0.8)',
           backdropFilter: 'blur(10px)',
           border: '1px solid rgba(255,255,255,0.12)',
           borderRadius: '12px', padding: '16px',
-          fontFamily: "'Inter', sans-serif",
           boxShadow: '0 4px 20px rgba(0,0,0,0.4)',
           color: '#e2e8f0', minWidth: '200px',
         }}
@@ -946,56 +960,6 @@ function App() {
         </div>
       </div>
     </>
-  );
-}
-
-// ── Small reusable toggle row ─────────────────────────────────────────────────
-interface ToggleRowProps {
-  label: string;
-  active: boolean;
-  activeColor: string;
-  labelColor: string;
-  onClick: () => void;
-  title: string;
-  icon: React.ReactNode;
-}
-
-function ToggleRow({ label, active, activeColor, labelColor, onClick, title, icon }: ToggleRowProps) {
-  return (
-    <div
-      onClick={onClick}
-      title={title}
-      style={{
-        background: 'rgba(15, 15, 25, 0.82)',
-        backdropFilter: 'blur(10px)',
-        border: '1px solid rgba(255,255,255,0.12)',
-        borderRadius: '12px',
-        padding: '10px 16px',
-        display: 'flex', alignItems: 'center', gap: '10px',
-        boxShadow: '0 4px 20px rgba(0,0,0,0.4)',
-        cursor: 'pointer', userSelect: 'none',
-      }}
-    >
-      {icon}
-      <span style={{ color: '#e2e8f0', fontSize: '13px', fontWeight: 600, letterSpacing: '0.02em' }}>{label}</span>
-      <div style={{
-        width: '38px', height: '20px', borderRadius: '10px',
-        background: active ? activeColor : '#334155',
-        position: 'relative', transition: 'background 0.25s ease', flexShrink: 0,
-      }}>
-        <div style={{
-          position: 'absolute', top: '2px',
-          left: active ? '20px' : '2px',
-          width: '16px', height: '16px', borderRadius: '50%',
-          background: '#fff',
-          transition: 'left 0.25s ease',
-          boxShadow: '0 1px 4px rgba(0,0,0,0.3)',
-        }} />
-      </div>
-      <span style={{ color: active ? labelColor : '#64748b', fontSize: '12px', fontWeight: 500, minWidth: '20px' }}>
-        {active ? 'On' : 'Off'}
-      </span>
-    </div>
   );
 }
 

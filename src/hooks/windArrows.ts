@@ -18,18 +18,19 @@ const arrowCache = new Map<string, (ArrowWindEntry | null)[]>();
 const arrowInflight = new Map<string, Promise<void>>();
 
 /** Round to 2 decimal places (~1.1 km grid snapping). */
-export function arrowKey(lat: number, lng: number): string {
-    return `${lat.toFixed(2)},${lng.toFixed(2)}`;
+export function arrowKey(lat: number, lng: number, date: string): string {
+    return `${lat.toFixed(2)},${lng.toFixed(2)},${date}`;
 }
 
 /** Return cached entry for (lat, lng, hourIndex), or null if not yet loaded. */
-export function getCachedArrow(lat: number, lng: number, hourIndex: number): ArrowWindEntry | null {
-    return arrowCache.get(arrowKey(lat, lng))?.[hourIndex] ?? null;
+export function getCachedArrow(lat: number, lng: number, date: string, hourIndex: number): ArrowWindEntry | null {
+    return arrowCache.get(arrowKey(lat, lng, date))?.[hourIndex] ?? null;
 }
 
 // ── Fetch a single grid point (24 h of data) ─────────────────────────────────
-export async function loadArrowPoint(lat: number, lng: number): Promise<void> {
-    const key = arrowKey(lat, lng);
+// ── Fetch a single grid point (24 h of data) ─────────────────────────────────
+export async function loadArrowPoint(lat: number, lng: number, date: string): Promise<void> {
+    const key = arrowKey(lat, lng, date);
     if (arrowCache.has(key)) return;
     if (arrowInflight.has(key)) return arrowInflight.get(key);
 
@@ -39,7 +40,8 @@ export async function loadArrowPoint(lat: number, lng: number): Promise<void> {
         `https://api.open-meteo.com/v1/forecast` +
         `?latitude=${rlat}&longitude=${rlng}` +
         `&hourly=windspeed_10m,winddirection_10m` +
-        `&forecast_days=2&timezone=auto&wind_speed_unit=kmh`;
+        `&start_date=${date}&end_date=${date}` +
+        `&timezone=auto&wind_speed_unit=kmh`;
 
     const p = fetch(url)
         .then((r) => {
@@ -50,16 +52,14 @@ export async function loadArrowPoint(lat: number, lng: number): Promise<void> {
             const times: string[] = json.hourly.time;
             const speeds: number[] = json.hourly.windspeed_10m;
             const dirs: number[] = json.hourly.winddirection_10m;
-            const now = Date.now();
+            // Removed strict 'now' check because date might be in past or far future, just take what API returned for that day
 
             const entries: (ArrowWindEntry | null)[] = [];
             for (let i = 0; i < times.length && entries.length < 24; i++) {
-                if (new Date(times[i]).getTime() >= now) {
-                    entries.push({
-                        speed_kmh: Math.round(speeds[i] * 10) / 10,
-                        direction_deg: Math.round(dirs[i]),
-                    });
-                }
+                entries.push({
+                    speed_kmh: Math.round(speeds[i] * 10) / 10,
+                    direction_deg: Math.round(dirs[i]),
+                });
             }
             while (entries.length < 24) entries.push(null);
             arrowCache.set(key, entries);
@@ -111,17 +111,21 @@ export function buildGridPoints(
  */
 export function buildArrowsGeoJSON(
     pts: GridPoint[],
+    date: string,
     hourIndex: number,
 ): GeoJSON.FeatureCollection {
     const features: GeoJSON.Feature[] = [];
 
     for (const { lat, lng } of pts) {
-        let entry = getCachedArrow(lat, lng, hourIndex);
+        let entry = getCachedArrow(lat, lng, date, hourIndex);
 
-        // Fallback: nearest cached point for this hour
+        // Fallback: nearest cached point for this hour (must match date)
         if (!entry) {
             let bestDist = Infinity;
             for (const [k, dayData] of arrowCache) {
+                // Ensure key matches date
+                if (!k.endsWith(date)) continue;
+
                 const e = dayData?.[hourIndex];
                 if (!e) continue;
                 const [klat, klng] = k.split(',').map(Number);

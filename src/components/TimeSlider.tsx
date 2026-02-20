@@ -35,12 +35,11 @@ export default function DateTimeControl({ date, setDate, onCommitDate, hourlyDat
                 left: '50%',
                 transform: 'translateX(-50%)',
                 zIndex: 10,
-                background: 'rgba(10, 12, 22, 0.88)',
+                background: 'rgba(10, 12, 22, 0.8)',
                 backdropFilter: 'blur(14px)',
                 border: '1px solid rgba(255,255,255,0.1)',
                 borderRadius: '16px',
                 padding: '14px 24px 12px',
-                fontFamily: "'Inter', sans-serif",
                 boxShadow: '0 8px 32px rgba(0,0,0,0.45)',
                 color: '#e2e8f0',
                 minWidth: '340px',
@@ -125,8 +124,8 @@ export default function DateTimeControl({ date, setDate, onCommitDate, hourlyDat
                         onClick={onCommitDate}
                         disabled={loading}
                         style={{
-                            background: loading ? '#334155' : '#3b82f6',
-                            color: loading ? '#94a3b8' : '#ffffff',
+                            background: loading ? '#334155' : '#9BDD4A',
+                            color: loading ? '#94a3b8' : '#000000',
                             border: 'none',
                             borderRadius: '6px',
                             padding: '4px 12px',
@@ -148,7 +147,7 @@ export default function DateTimeControl({ date, setDate, onCommitDate, hourlyDat
                     Forecast
                 </span>
 
-                <span style={{ fontSize: '12px', color: '#7dd3fc', fontWeight: 700 }}>
+                <span style={{ fontSize: '12px', color: '#9BDD4A', fontWeight: 700 }}>
                     {getTimeLabel(hourIndex)}
                 </span>
             </div>
@@ -166,8 +165,8 @@ export default function DateTimeControl({ date, setDate, onCommitDate, hourlyDat
             cursor: pointer;
             background: linear-gradient(
               to right,
-              #3b82f6 0%,
-              #3b82f6 ${pct}%,
+              #9BDD4A 0%,
+              #9BDD4A ${pct}%,
               rgba(255,255,255,0.12) ${pct}%,
               rgba(255,255,255,0.12) 100%
             );
@@ -183,22 +182,22 @@ export default function DateTimeControl({ date, setDate, onCommitDate, hourlyDat
             width: 16px;
             height: 16px;
             border-radius: 50%;
-            background: #60a5fa;
-            box-shadow: 0 0 0 3px rgba(96,165,250,0.25), 0 2px 6px rgba(0,0,0,0.4);
+            background: #9BDD4A;
+            box-shadow: 0 0 0 3px rgba(155, 221, 74, 0.25), 0 2px 6px rgba(0,0,0,0.4);
             cursor: pointer;
             transition: transform 0.15s, box-shadow 0.15s;
           }
           .wind-slider:not(:disabled)::-webkit-slider-thumb:hover {
             transform: scale(1.2);
-            box-shadow: 0 0 0 5px rgba(96,165,250,0.3), 0 2px 8px rgba(0,0,0,0.4);
+            box-shadow: 0 0 0 5px rgba(155, 221, 74, 0.3), 0 2px 8px rgba(0,0,0,0.4);
           }
           .wind-slider::-moz-range-thumb {
             width: 16px;
             height: 16px;
             border: none;
             border-radius: 50%;
-            background: #60a5fa;
-            box-shadow: 0 0 0 3px rgba(96,165,250,0.25), 0 2px 6px rgba(0,0,0,0.4);
+            background: #9BDD4A;
+            box-shadow: 0 0 0 3px rgba(155, 221, 74, 0.25), 0 2px 6px rgba(0,0,0,0.4);
             cursor: pointer;
           }
         `}</style>

@@ -22,21 +22,31 @@ function cacheKey(lat: number, lon: number, date: string): string {
 }
 
 function buildUrl(lat: number, lon: number, date: string): string {
-  return (
+  const url = (
     `https://api.open-meteo.com/v1/forecast` +
     `?latitude=${lat}&longitude=${lon}` +
     `&hourly=windspeed_10m,winddirection_10m` +
     `&start_date=${date}&end_date=${date}` +
     `&timezone=auto&wind_speed_unit=kmh`
   );
+  console.log(`[WindFetch] URL: ${url}`);
+  return url;
 }
 
 // ── Core fetch (exported for use by useMultiPointWindData) ────────────────────
 /** Fetch + cache a single lat/lon. Concurrent calls with the same key share one request. */
 export async function fetchWindForPoint(lat: number, lon: number, date: string): Promise<HourlyWindEntry[]> {
   const key = cacheKey(lat, lon, date);
-  if (cache.has(key)) return cache.get(key)!;
-  if (inflight.has(key)) return inflight.get(key)!;
+  if (cache.has(key)) {
+    console.log(`[WindFetch] Cache HIT for key: ${key}`);
+    return cache.get(key)!;
+  }
+  if (inflight.has(key)) {
+    console.log(`[WindFetch] In-flight JOIN for key: ${key}`);
+    return inflight.get(key)!;
+  }
+
+  console.log(`[WindFetch] Fetching NEW for key: ${key}`);
 
   const p = fetch(buildUrl(lat, lon, date))
     .then((r) => {
@@ -47,6 +57,8 @@ export async function fetchWindForPoint(lat: number, lon: number, date: string):
       const times: string[] = json.hourly.time;
       const speeds: number[] = json.hourly.windspeed_10m;
       const dirs: number[] = json.hourly.winddirection_10m;
+
+      console.log(`[WindInfo] Response for ${date}: ${times.length} intervals. Range: ${times[0]} to ${times[times.length - 1]}`);
 
 
       const entries: HourlyWindEntry[] = times.map((t, i) => ({
