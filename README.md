@@ -15,6 +15,8 @@ Have you ever ridden a hill in a headwind and wished you knew ahead of time to p
 
 <p align="center">
 <img width="80%" alt="Screenshot 2026-02-19 at 9 32 45 PM" src="https://github.com/user-attachments/assets/594c779c-8c8f-4717-840b-991490dc81fb" />
+<img width="80%" alt="Screenshot 2026-02-19 at 10 15 52 PM" src="https://github.com/user-attachments/assets/fde5dd20-0521-431b-b891-510a2caa0580" />
+
 
 
 ## Setup
