@@ -1,9 +1,6 @@
-# PreRide
-
-Have you ever ridden a hill in a headwind and wished you knew ahead of time to properly plab your energy? PreRide is a web app that visualizesthe relative difficulty of a route based on wind effect and elevation.
-
 <img width="1390" height="851" alt="preride_cover" src="https://github.com/user-attachments/assets/94704157-7bc1-491e-83a4-92a01a2af1b6" />
 
+Have you ever ridden a hill in a headwind and wished you knew ahead of time to properly plan your energy? PreRide is a simple web app that visualizes the relative difficulty of a route based on wind effect and elevation.
 
 ## Features
 
