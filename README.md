@@ -4,6 +4,9 @@
   
 Have you ever ridden a hill in a headwind and wished you knew ahead of time to properly plan your energy? PreRide is a simple web app that visualizes the relative difficulty of a route based on wind effect and elevation.
 
+## Try it out!
+https://preride-59wd6vpny-jennifers-projects-5f349bc7.vercel.app
+
 ## Features
 
 - Load and display GPX routes with start/finish markers
