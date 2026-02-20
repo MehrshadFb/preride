@@ -124,7 +124,7 @@ export default function SettingsPanel({
 
                 <div style={{ height: '1px', background: 'rgba(255,255,255,0.1)' }} />
 
-                <h3 style={{ margin: 0, fontSize: '14px', fontWeight: 600, color: '#fff', opacity: 0.9 }}>Factors/View</h3>
+                <h3 style={{ margin: 0, fontSize: '14px', fontWeight: 600, color: '#fff', opacity: 0.9 }}>Toggles</h3>
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                     {/* Use simple row toggles for now, preserving logic */}

@@ -26,6 +26,11 @@ const WIND_ARROWS_SOURCE = 'wind-arrows';
 const WIND_ARROWS_LAYER = 'wind-arrows-layer';
 const ARROW_IMAGE_ID = 'wind-arrow-icon';
 
+const ROUTE_OUTLINE_LAYER_ID_P2 = 'route-outline-p2';
+const ROUTE_LAYER_ID_P2 = 'route-line-p2';
+const ROUTE_INTERACT_SOURCE_ID = 'route-interact';
+const ROUTE_INTERACT_LAYER_ID = 'route-interact-layer';
+
 /** Pick n evenly-spaced points along the route for wind sampling. */
 function sampleRoutePoints(coords: number[][], n: number): { lat: number; lon: number }[] {
   if (coords.length === 0) return [];
@@ -40,6 +45,7 @@ function sampleRoutePoints(coords: number[][], n: number): { lat: number; lon: n
 const ARROW_COLS = 6;
 const ARROW_ROWS = 4;
 const ARROW_CONCURRENCY = 3;
+
 
 // ─── Arrow icon ───────────────────────────────────────────────────────────────
 function createArrowImage(size = 40): { width: number; height: number; data: Uint8ClampedArray } {
@@ -153,16 +159,6 @@ function nearestSampleIndex(
 // ─── Segment collection builder ───────────────────────────────────────────────
 const CLIMB_K = 600;
 const GRADE_CLAMP = 0.5;
-const OFFSET_METERS = 5;
-
-function offsetPoint(lat: number, lon: number, bearingDeg: number, distMeters: number): [number, number] {
-  const perpRad = ((bearingDeg + 90) * Math.PI) / 180;
-  const dy = distMeters * Math.cos(perpRad);
-  const dx = distMeters * Math.sin(perpRad);
-  const latOffset = dy / 111111;
-  const lonOffset = dx / (111111 * Math.cos((lat * Math.PI) / 180));
-  return [lon + lonOffset, lat + latOffset];
-}
 
 function buildSegmentCollection(
   coords: number[][],
@@ -195,6 +191,7 @@ function buildSegmentCollection(
   // ── Per-segment scoring pass ──────────────────────────────────────────────
   const segmentData: (DebugSegmentStats & {
     coords: number[][];
+    passIndex: number;
   })[] = [];
 
   for (let i = 0; i < coords.length - 1; i++) {
@@ -231,18 +228,15 @@ function buildSegmentCollection(
 
     const sufferRaw = (includeWind ? headwindRaw : 0) + climbPenalty;
 
-    // Apply offset if this segment is part of a bidirectional path
+    // Detect if this segment is a return pass of a bidirectional edge
     const edgeKey = getEdgeKey(coords[i], coords[i + 1]);
     const totalVisits = edgeCounts.get(edgeKey) || 1;
-    let finalCoords = [coords[i], coords[i + 1]];
+    let passIndex = 0;
 
     if (totalVisits > 1) {
       const visitsSoFar = edgeVisited.get(edgeKey) || 0;
       edgeVisited.set(edgeKey, visitsSoFar + 1);
-      const sign = visitsSoFar === 0 ? 1 : -1;
-      const p1 = offsetPoint(lat1, lng1, bearing, sign * OFFSET_METERS);
-      const p2 = offsetPoint(lat2, lng2, bearing, sign * OFFSET_METERS);
-      finalCoords = [p1, p2];
+      passIndex = (edgeVisited.get(edgeKey) ?? 0) > 1 ? 1 : 0;
     }
 
     segmentData.push({
@@ -251,7 +245,8 @@ function buildSegmentCollection(
       climbPenalty,
       sufferRaw,
       totalScore: 0,
-      coords: finalCoords,
+      coords: [coords[i], coords[i + 1]],  // always original coords — visual offset handled by Mapbox line-offset
+      passIndex,
     });
   }
 
@@ -268,6 +263,7 @@ function buildSegmentCollection(
       climbPenalty: seg.climbPenalty,
       sufferRaw: seg.sufferRaw,
       totalScore: seg.sufferRaw / maxRaw,
+      passIndex: seg.passIndex,
     },
     geometry: { type: 'LineString', coordinates: seg.coords },
   }));
@@ -305,11 +301,8 @@ function App() {
     setFetchedDate(selectedDate);
   }, [selectedDate]);
 
-  // Current hour of wind data (0-23), default to nearest next hour
-  const [hourIndex, setHourIndex] = useState(() => {
-    const now = new Date();
-    return Math.min(23, now.getHours() + 1);
-  });
+  // Current hour of wind data (0-23), default to current system hour
+  const [hourIndex, setHourIndex] = useState(() => new Date().getHours());
 
   // Debug hover state
   const [hoveredSegment, setHoveredSegment] = useState<{
@@ -387,6 +380,15 @@ function App() {
 
   const [mapStyle, setMapStyle] = useState<'satellite' | 'streets'>('satellite');
 
+  // Update logo image and blend mode based on current map style
+  useEffect(() => {
+    const logo = document.querySelector('img[alt="PreRide Logo"]') as HTMLImageElement | null;
+    if (logo) {
+      logo.src = mapStyle === 'satellite' ? '/textlogo_white.png' : '/textlogo.png';
+      logo.style.mixBlendMode = mapStyle === 'satellite' ? 'screen' : 'multiply';
+    }
+  }, [mapStyle]);
+
   // ── Layer Initialisation (reusable for style switches) ────────────────────
   const initializeLayers = useCallback((m: mapboxgl.Map) => {
     // 1. Arrow Icon
@@ -439,6 +441,70 @@ function App() {
         },
       });
     }
+
+    // 5. Offset layers for return-pass (passIndex=1) with pixel-based line-offset
+    if (!m.getLayer(ROUTE_OUTLINE_LAYER_ID_P2)) {
+      m.addLayer({
+        id: ROUTE_OUTLINE_LAYER_ID_P2,
+        type: 'line',
+        source: ROUTE_SOURCE_ID,
+        filter: ['==', ['get', 'passIndex'], 1],
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: {
+          'line-color': '#ffffff',
+          'line-width': 9,
+          'line-opacity': 0.9,
+          'line-offset': 10,
+        },
+      });
+    }
+    if (!m.getLayer(ROUTE_LAYER_ID_P2)) {
+      m.addLayer({
+        id: ROUTE_LAYER_ID_P2,
+        type: 'line',
+        source: ROUTE_SOURCE_ID,
+        filter: ['==', ['get', 'passIndex'], 1],
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: {
+          'line-color': [
+            'interpolate', ['linear'], ['get', 'score'],
+            0, '#22c55e',
+            0.5, '#eab308',
+            1, '#ef4444',
+          ],
+          'line-width': 5,
+          'line-opacity': 0.9,
+          'line-offset': 10,
+        },
+      });
+    }
+
+    // 6. Filter passIndex=0 features away from base layers so they don't overlap P1 rendering
+    if (m.getLayer(ROUTE_OUTLINE_LAYER_ID)) {
+      m.setFilter(ROUTE_OUTLINE_LAYER_ID, ['==', ['get', 'passIndex'], 0]);
+    }
+    if (m.getLayer(ROUTE_LAYER_ID)) {
+      m.setFilter(ROUTE_LAYER_ID, ['==', ['get', 'passIndex'], 0]);
+    }
+
+    // 7. Invisible interaction layer on top — full continuous route for hover hit-testing
+    if (!m.getSource(ROUTE_INTERACT_SOURCE_ID)) {
+      m.addSource(ROUTE_INTERACT_SOURCE_ID, {
+        type: 'geojson',
+        data: { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: [] } },
+      });
+    }
+    if (!m.getLayer(ROUTE_INTERACT_LAYER_ID)) {
+      m.addLayer({
+        id: ROUTE_INTERACT_LAYER_ID,
+        type: 'line',
+        source: ROUTE_INTERACT_SOURCE_ID,
+        paint: {
+          'line-width': 20,
+          'line-opacity': 0,
+        },
+      });
+    }
   }, [routeCoords, samplePoints]);
 
   refreshArrowsRef.current = refreshArrows;
@@ -473,29 +539,58 @@ function App() {
 
     if (routeCoords.length < 2) return;
 
+    // Inject tooltip CSS once
+    if (!document.getElementById('marker-tooltip-style')) {
+      const style = document.createElement('style');
+      style.id = 'marker-tooltip-style';
+      style.textContent = `
+        .route-marker { position: relative; cursor: default; }
+        .route-marker .marker-tip {
+          display: none;
+          position: absolute;
+          bottom: calc(100% + 8px);
+          left: 50%;
+          transform: translateX(-50%);
+          background: rgba(15,15,25,0.92);
+          color: #f1f5f9;
+          font: 600 11px/1 system-ui, sans-serif;
+          padding: 4px 8px;
+          border-radius: 6px;
+          white-space: nowrap;
+          pointer-events: none;
+          border: 1px solid rgba(255,255,255,0.15);
+          box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+        }
+        .route-marker:hover .marker-tip { display: block; }
+      `;
+      document.head.appendChild(style);
+    }
+
     const makeMarkerEl = (color: string, label: string) => {
       const el = document.createElement('div');
+      el.className = 'route-marker';
       el.style.cssText = `
         background: ${color};
-        border: 2.5px solid #ffffff;
-        border-radius: 50% 50% 50% 0;
-        transform: rotate(-45deg);
-        width: 22px; height: 22px;
-        box-shadow: 0 2px 6px rgba(0,0,0,0.5);
-        cursor: default;
+        border: 3px solid #ffffff;
+        border-radius: 50%;
+        width: 18px; height: 18px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.6);
       `;
-      el.title = label;
+      const tip = document.createElement('span');
+      tip.className = 'marker-tip';
+      tip.textContent = label;
+      el.appendChild(tip);
       return el;
     };
 
     const [startLng, startLat] = routeCoords[0];
     const [endLng, endLat] = routeCoords[routeCoords.length - 1];
 
-    startMarkerRef.current = new mapboxgl.Marker({ element: makeMarkerEl('#22c55e', 'Start'), anchor: 'bottom' })
+    startMarkerRef.current = new mapboxgl.Marker({ element: makeMarkerEl('#22c55e', 'Start'), anchor: 'center' })
       .setLngLat([startLng, startLat])
       .addTo(m);
 
-    finishMarkerRef.current = new mapboxgl.Marker({ element: makeMarkerEl('#ef4444', 'Finish'), anchor: 'bottom' })
+    finishMarkerRef.current = new mapboxgl.Marker({ element: makeMarkerEl('#ef4444', 'End'), anchor: 'center' })
       .setLngLat([endLng, endLat])
       .addTo(m);
   }, [mapReady, routeCoords]);
@@ -529,11 +624,22 @@ function App() {
         initializeLayers(m);
         setMapReady(true);
 
-        // ── Route hover: show debug stats panel ───────────────────────────
-        m.on('mousemove', ROUTE_LAYER_ID, (e) => {
-          if (!e.features || e.features.length === 0) return;
-          const props = e.features[0].properties;
-          if (!props) return;
+        // ── Route hover via invisible interact layer + queryRenderedFeatures ──
+        const handleRouteLeave = () => {
+          setHoveredSegment(null);
+          m.getCanvas().style.cursor = '';
+        };
+
+        m.on('mousemove', ROUTE_INTERACT_LAYER_ID, (e) => {
+          // Query the actual per-segment layers to get scoring data
+          const features = m.queryRenderedFeatures(e.point, {
+            layers: [ROUTE_LAYER_ID, ROUTE_LAYER_ID_P2],
+          });
+          const props = features[0]?.properties;
+          if (!props) {
+            handleRouteLeave();
+            return;
+          }
 
           setHoveredSegment({
             stats: {
@@ -545,14 +651,10 @@ function App() {
             },
             mousePos: e.point,
           });
-
           m.getCanvas().style.cursor = 'crosshair';
         });
 
-        m.on('mouseleave', ROUTE_LAYER_ID, () => {
-          setHoveredSegment(null);
-          m.getCanvas().style.cursor = '';
-        });
+        m.on('mouseleave', ROUTE_INTERACT_LAYER_ID, handleRouteLeave);
       });
 
       // ── Pan/zoom: re-fetch wind arrows for new viewport ─────────────────
@@ -629,6 +731,19 @@ function App() {
     if (!mapReady) return;
     if (terrainOn) enableTerrain(); else disableTerrain();
   }, [mapReady, terrainOn, enableTerrain, disableTerrain, mapStyle]);
+
+  // ── Update invisible interact source (full route LineString) ─────────────
+  useEffect(() => {
+    const m = map.current;
+    if (!m || !mapReady) return;
+    const src = m.getSource(ROUTE_INTERACT_SOURCE_ID) as mapboxgl.GeoJSONSource | undefined;
+    if (!src) return;
+    src.setData({
+      type: 'Feature',
+      properties: {},
+      geometry: { type: 'LineString', coordinates: routeCoords },
+    });
+  }, [mapReady, routeCoords]);
 
   // ── Elevation sampling (waits for DEM tiles to load) ─────────────────────
   useEffect(() => {
@@ -844,16 +959,18 @@ function App() {
       {/* ─── Route Debug Panel (mouse-following) ─── */}
       <RouteDebugPanel stats={hoveredSegment?.stats ?? null} mousePos={hoveredSegment?.mousePos ?? null} />
 
-      {/* ─── Bottom-Center: Time Slider ─── */}
-      <TimeSlider
-        date={selectedDate}
-        setDate={setSelectedDate}
-        onCommitDate={handleCommitDate}
-        hourlyData={allData[Math.floor(samplePoints.length / 2)] ?? []}
-        hourIndex={hourIndex}
-        onChange={setHourIndex}
-        loading={windLoading}
-      />
+      {/* ─── Bottom-Center: Time Slider (only when wind is on) ─── */}
+      {windOn && (
+        <TimeSlider
+          date={selectedDate}
+          setDate={setSelectedDate}
+          onCommitDate={handleCommitDate}
+          hourlyData={allData[Math.floor(samplePoints.length / 2)] ?? []}
+          hourIndex={hourIndex}
+          onChange={setHourIndex}
+          loading={windLoading}
+        />
+      )}
 
       {/* ─── Legend (bottom-right) ─── */}
       <div
@@ -867,7 +984,7 @@ function App() {
           color: '#e2e8f0', minWidth: '200px',
         }}
       >
-        <h4 style={{ margin: '0 0 4px 0', fontSize: '14px', fontWeight: 600 }}>Route Difficulty</h4>
+        <h4 style={{ margin: '0 0 4px 0', fontSize: '14px', fontWeight: 600 }}>Relative Difficulty</h4>
         <div style={{
           height: '12px', width: '100%', borderRadius: '6px',
           background: 'linear-gradient(to right, #22c55e, #eab308, #ef4444)',
