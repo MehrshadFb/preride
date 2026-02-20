@@ -31,7 +31,7 @@ export default function RouteDebugPanel({ stats, mousePos }: Props) {
         border: '1px solid rgba(255,255,255,0.2)',
         borderRadius: '8px',
         padding: '12px',
-        fontFamily: "'Inter', sans-serif",
+        fontFamily: '"Avenir", "Avenir Next", "Segoe UI", sans-serif',
         fontSize: '12px',
         color: '#e2e8f0',
         boxShadow: '0 4px 12px rgba(0,0,0,0.5)',

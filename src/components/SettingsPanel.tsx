@@ -39,6 +39,7 @@ export default function SettingsPanel({
                     alignItems: 'center',
                     gap: '8px',
                     fontSize: '13px',
+                    fontFamily: '"Avenir", "Avenir Next", "Segoe UI", sans-serif',
                     fontWeight: 600,
                     boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
                     transition: 'all 0.2s ease',

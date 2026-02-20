@@ -38,6 +38,7 @@ const UploadPanel: React.FC<Props> = ({
                         cursor: 'pointer',
                         fontSize: '13px',
                         fontWeight: 600,
+                        fontFamily: '"Avenir", "Avenir Next", "Segoe UI", sans-serif',
                         boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
                         display: 'flex',
                         alignItems: 'center',
