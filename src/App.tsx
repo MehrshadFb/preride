@@ -308,6 +308,8 @@ function App() {
     mousePos: { x: number; y: number };
   } | null>(null);
 
+  const initialLoadRef = useRef(true);
+
   // Cached per-point elevations (sampled once per route load; time-invariant)
   const cachedElevationsRef = useRef<number[]>([]);
 
@@ -610,9 +612,10 @@ function App() {
       map.current = new mapboxgl.Map({
         container: mapContainer.current,
         style: 'mapbox://styles/mapbox/satellite-streets-v12',
-        center: [-79.3832, 43.6532],
-        zoom: 10,
-        pitch: 45,
+        center: [-79.469542, 43.629462],
+        zoom: 14,
+        pitch: 70,
+        bearing: 30,
       });
 
       map.current.addControl(new mapboxgl.NavigationControl(), 'top-right');
@@ -818,6 +821,12 @@ function App() {
   useEffect(() => {
     const m = map.current;
     if (!m || !mapReady || routeCoords.length < 2) return;
+
+    if (initialLoadRef.current) {
+      initialLoadRef.current = false;
+      return;
+    }
+
     const bounds = routeCoords.reduce(
       (b, [lng, lat]) => b.extend([lng, lat] as [number, number]),
       new mapboxgl.LngLatBounds(
