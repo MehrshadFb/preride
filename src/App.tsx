@@ -723,6 +723,29 @@ function App() {
 
         m.on('mouseleave', ROUTE_HITBOX_LAYER_ID, handleRouteLeave);
         m.on('mouseleave', ROUTE_HITBOX_LAYER_ID_P2, handleRouteLeave);
+
+        // ── Route click zoom ──
+        const handleRouteClick = (e: mapboxgl.MapMouseEvent & { features?: mapboxgl.MapboxGeoJSONFeature[] }) => {
+          const feature = e.features?.[0];
+          if (!feature || feature.geometry.type !== 'LineString') return;
+
+          const coords = feature.geometry.coordinates;
+          if (!coords || coords.length === 0) return;
+
+          const bounds = new mapboxgl.LngLatBounds(coords[0] as [number, number], coords[0] as [number, number]);
+          for (const coord of coords) {
+            bounds.extend(coord as [number, number]);
+          }
+
+          m.fitBounds(bounds, {
+            padding: 100,
+            pitch: 70,
+            maxZoom: 20,
+          });
+        };
+
+        m.on('click', ROUTE_HITBOX_LAYER_ID, handleRouteClick);
+        m.on('click', ROUTE_HITBOX_LAYER_ID_P2, handleRouteClick);
       });
 
       // ── Pan/zoom: re-fetch wind arrows for new viewport ─────────────────
