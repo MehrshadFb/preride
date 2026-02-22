@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 
+export type RouteInputMode = 'upload' | 'pick';
+
 interface Props {
     onUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
     selectedFile: File | null;
@@ -8,6 +10,10 @@ interface Props {
     selectedDate: string;
     gpxError?: string | null;
     onZoomToRoute?: () => void;
+    routeInputMode: RouteInputMode;
+    onSetRouteInputMode: (mode: RouteInputMode) => void;
+    pickState: 'idle' | 'start' | 'end' | 'done';
+    onClearPick: () => void;
 }
 
 const UploadPanel: React.FC<Props> = ({
@@ -18,21 +24,26 @@ const UploadPanel: React.FC<Props> = ({
     selectedDate,
     gpxError,
     onZoomToRoute,
+    routeInputMode,
+    onSetRouteInputMode,
+    pickState,
+    onClearPick,
 }) => {
     const [expanded, setExpanded] = useState(false);
     const accentColor = '#9BDD4A';
+    const hasRoute = selectedFile || pickState === 'done';
 
     return (
         <div className="upload-panel">
-            {/* Main Upload Button + Recenter side-by-side */}
-            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', pointerEvents: 'auto' }}>
+            {/* Main Upload Button + Pick on Map + Recenter side-by-side */}
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', pointerEvents: 'auto', flexWrap: 'wrap' }}>
                 <button
                     onClick={() => setExpanded(!expanded)}
                     style={{
-                        background: selectedFile ? 'rgba(20, 20, 20, 0.8)' : accentColor,
+                        background: hasRoute ? 'rgba(20, 20, 20, 0.8)' : accentColor,
                         backdropFilter: 'blur(16px)',
                         border: '1px solid rgba(255,255,255,0.2)',
-                        color: selectedFile ? '#fff' : '#000',
+                        color: hasRoute ? '#fff' : '#000',
                         borderRadius: '24px',
                         padding: '8px 20px',
                         cursor: 'pointer',
@@ -46,15 +57,15 @@ const UploadPanel: React.FC<Props> = ({
                         transition: 'all 0.2s ease',
                     }}
                 >
-                    {selectedFile ? (
+                    {hasRoute ? (
                         <>
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                            Ride Uploaded
+                            Route Set
                         </>
                     ) : (
                         <>
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
-                            Upload Ride
+                            Set Route
                         </>
                     )}
                 </button>
@@ -133,7 +144,7 @@ const UploadPanel: React.FC<Props> = ({
             {/* Expanded Panel */}
             <div
                 style={{
-                    width: '260px',
+                    width: '280px',
                     background: 'rgba(20, 20, 20, 0.75)',
                     backdropFilter: 'blur(16px)',
                     borderRadius: '16px',
@@ -150,37 +161,160 @@ const UploadPanel: React.FC<Props> = ({
                     transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
                 }}
             >
-                {/* Upload Area */}
-                <label
-                    style={{
+                {/* Mode Toggle */}
+                <div style={{ display: 'flex', borderRadius: '10px', overflow: 'hidden', border: '1px solid rgba(255,255,255,0.12)' }}>
+                    <button
+                        onClick={() => onSetRouteInputMode('pick')}
+                        style={{
+                            flex: 1,
+                            padding: '10px 8px',
+                            background: routeInputMode === 'pick' ? accentColor : 'transparent',
+                            color: routeInputMode === 'pick' ? '#000' : '#9ca3af',
+                            border: 'none',
+                            cursor: 'pointer',
+                            fontSize: '12px',
+                            fontWeight: 600,
+                            fontFamily: '"Avenir", "Avenir Next", "Segoe UI", sans-serif',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: '6px',
+                            transition: 'all 0.2s',
+                        }}
+                    >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" />
+                            <circle cx="12" cy="10" r="3" />
+                        </svg>
+                        Pick on Map
+                    </button>
+                    <button
+                        onClick={() => onSetRouteInputMode('upload')}
+                        style={{
+                            flex: 1,
+                            padding: '10px 8px',
+                            background: routeInputMode === 'upload' ? accentColor : 'transparent',
+                            color: routeInputMode === 'upload' ? '#000' : '#9ca3af',
+                            border: 'none',
+                            cursor: 'pointer',
+                            fontSize: '12px',
+                            fontWeight: 600,
+                            fontFamily: '"Avenir", "Avenir Next", "Segoe UI", sans-serif',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: '6px',
+                            transition: 'all 0.2s',
+                        }}
+                    >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                            <polyline points="17 8 12 3 7 8" />
+                            <line x1="12" y1="3" x2="12" y2="15" />
+                        </svg>
+                        Upload GPX
+                    </button>
+                </div>
+
+                {/* Pick on Map instructions */}
+                {routeInputMode === 'pick' && (
+                    <div style={{
                         display: 'flex',
                         flexDirection: 'column',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: '8px',
-                        border: `2px dashed ${selectedFile ? '#64748b' : 'rgba(255,255,255,0.2)'}`,
+                        gap: '10px',
+                        padding: '16px',
                         borderRadius: '12px',
-                        padding: '24px 12px',
-                        cursor: 'pointer',
                         background: 'rgba(255,255,255,0.03)',
-                        transition: 'all 0.2s',
-                        textAlign: 'center',
-                    }}
-                    onMouseEnter={(e) => { e.currentTarget.style.borderColor = accentColor; e.currentTarget.style.background = 'rgba(255,255,255,0.08)'; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.borderColor = selectedFile ? '#64748b' : 'rgba(255,255,255,0.2)'; e.currentTarget.style.background = 'rgba(255,255,255,0.03)'; }}
-                >
-                    <input type="file" accept=".gpx" onChange={onUpload} style={{ display: 'none' }} />
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={selectedFile ? '#fff' : accentColor} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
-                    <div style={{ display: 'flex', flexDirection: 'column' }}>
-                        <span style={{ fontSize: '13px', fontWeight: 500, color: '#fff' }}>
-                            {selectedFile ? 'Change GPX File' : 'Drop GPX file here'}
-                        </span>
-                        <span style={{ fontSize: '11px', color: '#9ca3af' }}>or click to browse</span>
+                        border: '1px solid rgba(255,255,255,0.1)',
+                    }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                            <div style={{
+                                width: '24px', height: '24px', borderRadius: '50%',
+                                background: pickState === 'start' ? accentColor : (pickState === 'idle' ? 'rgba(255,255,255,0.15)' : '#22c55e'),
+                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                fontSize: '12px', fontWeight: 700,
+                                color: pickState === 'idle' ? '#9ca3af' : (pickState === 'start' ? '#000' : '#fff'),
+                                transition: 'all 0.2s',
+                                flexShrink: 0,
+                            }}>
+                                {pickState === 'idle' ? '1' : (pickState === 'start' ? '⬤' : '✓')}
+                            </div>
+                            <span style={{ fontSize: '13px', color: pickState === 'start' ? '#fff' : '#9ca3af', fontWeight: pickState === 'start' ? 600 : 400 }}>
+                                {pickState === 'start' ? 'Click the map to set start' : (pickState === 'idle' ? 'Set start point' : 'Start set')}
+                            </span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                            <div style={{
+                                width: '24px', height: '24px', borderRadius: '50%',
+                                background: pickState === 'end' ? accentColor : (pickState === 'done' ? '#ef4444' : 'rgba(255,255,255,0.15)'),
+                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                fontSize: '12px', fontWeight: 700,
+                                color: pickState === 'done' ? '#fff' : (pickState === 'end' ? '#000' : '#9ca3af'),
+                                transition: 'all 0.2s',
+                                flexShrink: 0,
+                            }}>
+                                {pickState === 'done' ? '✓' : '2'}
+                            </div>
+                            <span style={{ fontSize: '13px', color: pickState === 'end' ? '#fff' : '#9ca3af', fontWeight: pickState === 'end' ? 600 : 400 }}>
+                                {pickState === 'end' ? 'Click the map to set end' : (pickState === 'done' ? 'End set — route loaded!' : 'Set end point')}
+                            </span>
+                        </div>
+                        {pickState === 'done' && (
+                            <button
+                                onClick={onClearPick}
+                                style={{
+                                    marginTop: '4px',
+                                    background: 'rgba(255,255,255,0.08)',
+                                    border: '1px solid rgba(255,255,255,0.15)',
+                                    color: '#fff',
+                                    borderRadius: '8px',
+                                    padding: '8px',
+                                    cursor: 'pointer',
+                                    fontSize: '12px',
+                                    fontWeight: 600,
+                                    fontFamily: '"Avenir", "Avenir Next", "Segoe UI", sans-serif',
+                                    transition: 'all 0.2s',
+                                }}
+                            >
+                                Clear & Pick Again
+                            </button>
+                        )}
                     </div>
-                </label>
+                )}
+
+                {/* Upload Area (only in upload mode) */}
+                {routeInputMode === 'upload' && (
+                    <label
+                        style={{
+                            display: 'flex',
+                            flexDirection: 'column',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: '8px',
+                            border: `2px dashed ${selectedFile ? '#64748b' : 'rgba(255,255,255,0.2)'}`,
+                            borderRadius: '12px',
+                            padding: '24px 12px',
+                            cursor: 'pointer',
+                            background: 'rgba(255,255,255,0.03)',
+                            transition: 'all 0.2s',
+                            textAlign: 'center',
+                        }}
+                        onMouseEnter={(e) => { e.currentTarget.style.borderColor = accentColor; e.currentTarget.style.background = 'rgba(255,255,255,0.08)'; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.borderColor = selectedFile ? '#64748b' : 'rgba(255,255,255,0.2)'; e.currentTarget.style.background = 'rgba(255,255,255,0.03)'; }}
+                    >
+                        <input type="file" accept=".gpx" onChange={onUpload} style={{ display: 'none' }} />
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={selectedFile ? '#fff' : accentColor} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                            <span style={{ fontSize: '13px', fontWeight: 500, color: '#fff' }}>
+                                {selectedFile ? 'Change GPX File' : 'Drop GPX file here'}
+                            </span>
+                            <span style={{ fontSize: '11px', color: '#9ca3af' }}>or click to browse</span>
+                        </div>
+                    </label>
+                )}
 
                 {/* Stats */}
-                {selectedFile && (
+                {hasRoute && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '4px' }}>
                         <div style={{ height: '1px', background: 'rgba(255,255,255,0.1)' }} />
 

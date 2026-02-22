@@ -14,6 +14,7 @@ import RouteDebugPanel from './components/RouteDebugPanel';
 import type { DebugSegmentStats } from './components/RouteDebugPanel';
 import SettingsPanel from './components/SettingsPanel';
 import UploadPanel from './components/UploadPanel';
+import type { RouteInputMode } from './components/UploadPanel';
 import OnboardingOverlay from './components/OnboardingOverlay';
 
 
@@ -270,6 +271,21 @@ function buildSegmentCollection(
   return { type: 'FeatureCollection', features };
 }
 
+// Mapbox Directions API (cycling)
+async function fetchCyclingRoute(
+  start: [number, number],
+  end: [number, number],
+  token: string,
+): Promise<number[][]> {
+  const url = `https://api.mapbox.com/directions/v5/mapbox/cycling/${start[0]},${start[1]};${end[0]},${end[1]}?geometries=geojson&overview=full&access_token=${token}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Directions API error: HTTP ${res.status}`);
+  const json = await res.json();
+  const route = json.routes?.[0];
+  if (!route) throw new Error('No route found between the selected points');
+  return route.geometry.coordinates as number[][];
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 function App() {
   const mapContainer = useRef<HTMLDivElement>(null);
@@ -309,13 +325,26 @@ function App() {
   }, []);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
 
+  // Route input mode: upload GPX or pick on map
+  const [routeInputMode, setRouteInputMode] = useState<RouteInputMode>('pick');
+  const [pickState, setPickState] = useState<'idle' | 'start' | 'end' | 'done'>('start');
+  const [pickStart, setPickStart] = useState<[number, number] | null>(null);
+  const [pickEnd, setPickEnd] = useState<[number, number] | null>(null);
+  const pickStartMarkerRef = useRef<mapboxgl.Marker | null>(null);
+  const pickEndMarkerRef = useRef<mapboxgl.Marker | null>(null);
+  const pickStateRef = useRef(pickState);
+  const routeInputModeRef = useRef(routeInputMode);
+  useEffect(() => { pickStateRef.current = pickState; }, [pickState]);
+  useEffect(() => { routeInputModeRef.current = routeInputMode; }, [routeInputMode]);
+
   // Start/Finish markers
   const startMarkerRef = useRef<mapboxgl.Marker | null>(null);
   const finishMarkerRef = useRef<mapboxgl.Marker | null>(null);
 
-  // Active route coordinates (starts empty; loaded from default GPX, then replaced on upload)
+  // Active route coordinates (starts empty; loaded from default GPX, then replaced on upload or map pick)
   const [routeCoords, setRouteCoords] = useState<number[][]>([]);
   const [gpxError, setGpxError] = useState<string | null>(null);
+  const [routeLoading, setRouteLoading] = useState(false);
 
   // Date/Time state (YYYY-MM-DD), default to today
   const [selectedDate, setSelectedDate] = useState(() => new Date().toISOString().split('T')[0]);
@@ -354,13 +383,11 @@ function App() {
 
   // ── Application Ready Logic ───────────────────────────────────────────────
   useEffect(() => {
-    // ready
     if (appReady) return;
-
-    if (mapReady && routeCoords.length > 0 && !windLoading) {
+    if (mapReady) {
       setAppReady(true);
     }
-  }, [mapReady, routeCoords.length, windLoading, appReady]);
+  }, [mapReady, appReady]);
 
   // Fallback timeout to guarantee the loading screen disappears
   useEffect(() => {
@@ -576,34 +603,18 @@ function App() {
 
   refreshArrowsRef.current = refreshArrows;
 
-  // ── Default GPX route load ────────────────────────────────────────────────
-  useEffect(() => {
-    fetch('/default_route.gpx')
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status} loading default_route.gpx`);
-        return res.text();
-      })
-      .then((text) => {
-        const coords = parseGpx(text);
-        setRouteCoords(coords);
-      })
-      .catch((err) => {
-        console.error('[DefaultRoute] Failed to load default_route.gpx:', err);
-        setRouteCoords([]);
-      });
-  }, []);
-
-  // ── Start/Finish markers ──────────────────────────────────────────────────
+  // Start/Finish markers
   useEffect(() => {
     const m = map.current;
     if (!m || !mapReady) return;
-
     // Remove previous markers
     startMarkerRef.current?.remove();
     finishMarkerRef.current?.remove();
     startMarkerRef.current = null;
     finishMarkerRef.current = null;
 
+    // Skip if in pick mode (pick markers handle this) or no route
+    if (routeInputMode === 'pick') return;
     if (routeCoords.length < 2) return;
 
     // Inject tooltip CSS once
@@ -660,7 +671,7 @@ function App() {
     finishMarkerRef.current = new mapboxgl.Marker({ element: makeMarkerEl('#ef4444', 'End'), anchor: 'center' })
       .setLngLat([endLng, endLat])
       .addTo(m);
-  }, [mapReady, routeCoords]);
+  }, [mapReady, routeCoords, routeInputMode]);
 
   // ── Map initialisation ────────────────────────────────────────────────────
   useEffect(() => {
@@ -746,6 +757,25 @@ function App() {
 
         m.on('click', ROUTE_HITBOX_LAYER_ID, handleRouteClick);
         m.on('click', ROUTE_HITBOX_LAYER_ID_P2, handleRouteClick);
+        m.on('click', (e: mapboxgl.MapMouseEvent) => {
+          // Ignore if not in pick mode
+          if (routeInputModeRef.current !== 'pick') return;
+          const state = pickStateRef.current;
+          if (state !== 'start' && state !== 'end') return;
+          // Ignore clicks on the route hitbox layers
+          const hitFeatures = m.queryRenderedFeatures(e.point, {
+            layers: [ROUTE_HITBOX_LAYER_ID, ROUTE_HITBOX_LAYER_ID_P2].filter(l => m.getLayer(l)),
+          });
+          if (hitFeatures.length > 0) return;
+
+          const lngLat: [number, number] = [e.lngLat.lng, e.lngLat.lat];
+
+          if (state === 'start') {
+            window.dispatchEvent(new CustomEvent('map-pick-point', { detail: { type: 'start', lngLat } }));
+          } else if (state === 'end') {
+            window.dispatchEvent(new CustomEvent('map-pick-point', { detail: { type: 'end', lngLat } }));
+          }
+        });
       });
 
       // ── Pan/zoom: re-fetch wind arrows for new viewport ─────────────────
@@ -967,12 +997,152 @@ function App() {
     src.setData(buildArrowsGeoJSON(arrowGridRef.current, fetchedDate, hourIndex));
   }, [mapReady, windOn, hourIndex, fetchedDate, mapStyle]);
 
+  // Handle map pick events
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { type, lngLat } = (e as CustomEvent).detail as { type: 'start' | 'end'; lngLat: [number, number] };
+      if (type === 'start') {
+        setPickStart(lngLat);
+        setPickState('end');
+      } else {
+        setPickEnd(lngLat);
+        setPickState('done');
+      }
+    };
+    window.addEventListener('map-pick-point', handler);
+    return () => window.removeEventListener('map-pick-point', handler);
+  }, []);
+
+  // Pick markers
+  useEffect(() => {
+    const m = map.current;
+    if (!m || !mapReady) return;
+    // Remove previous pick markers - not sure if it's needed
+    pickStartMarkerRef.current?.remove();
+    pickStartMarkerRef.current = null;
+    pickEndMarkerRef.current?.remove();
+    pickEndMarkerRef.current = null;
+
+    if (routeInputMode !== 'pick') return; // show only in pick mode
+
+    // TODO: replace with icon or svg
+    const makePinEl = (color: string, pulse: boolean) => {
+      const el = document.createElement('div');
+      el.className = 'route-marker';
+      el.style.cssText = `
+        background: ${color};
+        border: 3px solid #ffffff;
+        border-radius: 50%;
+        width: 20px; height: 20px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.6);
+        cursor: grab;
+        ${pulse ? 'animation: pick-pulse 1.5s ease-in-out infinite;' : ''}
+      `;
+      return el;
+    };
+    if (!document.getElementById('pick-pulse-style')) {
+      const style = document.createElement('style');
+      style.id = 'pick-pulse-style';
+      style.textContent = `
+        @keyframes pick-pulse {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(155,221,74,0.5); }
+          50% { box-shadow: 0 0 0 10px rgba(155,221,74,0); }
+        }
+      `;
+      document.head.appendChild(style);
+    }
+
+    if (pickStart) {
+      const marker = new mapboxgl.Marker({
+        element: makePinEl('#22c55e', pickState === 'end'),
+        anchor: 'center',
+        draggable: true,
+      })
+        .setLngLat(pickStart)
+        .addTo(m);
+
+      marker.on('dragend', () => {
+        const pos = marker.getLngLat();
+        setPickStart([pos.lng, pos.lat]);
+        if (pickStateRef.current === 'done') {
+          setPickState('done'); // re-fetch
+        }
+      });
+      pickStartMarkerRef.current = marker;
+    }
+
+    if (pickEnd) {
+      const marker = new mapboxgl.Marker({
+        element: makePinEl('#ef4444', false),
+        anchor: 'center',
+        draggable: true,
+      })
+        .setLngLat(pickEnd)
+        .addTo(m);
+
+      marker.on('dragend', () => {
+        const pos = marker.getLngLat();
+        setPickEnd([pos.lng, pos.lat]);
+        if (pickStateRef.current === 'done') {
+          setPickState('done'); // re-fetch
+        }
+      });
+      pickEndMarkerRef.current = marker;
+    }
+  }, [mapReady, pickStart, pickEnd, pickState, routeInputMode]);
+
+  // Fetch cycling route when both points are set
+  useEffect(() => {
+    if (pickState !== 'done' || !pickStart || !pickEnd) return;
+    const token = import.meta.env.VITE_MAPBOX_TOKEN;
+    if (!token) return;
+    setRouteLoading(true);
+    setGpxError(null);
+    fetchCyclingRoute(pickStart, pickEnd, token)
+      .then((coords) => {
+        setRouteCoords(coords);
+        setSelectedFile(null); // clear any uploaded file to display only one path at a time
+      })
+      .catch((err) => {
+        setGpxError(err instanceof Error ? err.message : 'Failed to fetch route');
+      })
+      .finally(() => setRouteLoading(false));
+  }, [pickState, pickStart, pickEnd]);
+
+  // Clear pick state and markers
+  const handleClearPick = useCallback(() => {
+    setPickStart(null);
+    setPickEnd(null);
+    setPickState('start');
+    setRouteCoords([]);
+    setGpxError(null);
+    pickStartMarkerRef.current?.remove();
+    pickEndMarkerRef.current?.remove();
+    pickStartMarkerRef.current = null;
+    pickEndMarkerRef.current = null;
+  }, []);
+
+  // Map cursor for pick mode
+  useEffect(() => {
+    const m = map.current;
+    if (!m || !mapReady) return;
+    if (routeInputMode === 'pick' && (pickState === 'start' || pickState === 'end')) {
+      m.getCanvas().style.cursor = 'crosshair';
+    } else {
+      m.getCanvas().style.cursor = '';
+    }
+  }, [mapReady, routeInputMode, pickState]);
+
   // ── GPX upload handler ────────────────────────────────────────────────────
   const handleGpxUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     e.target.value = '';
     setSelectedFile(file);
+    // Clear pick state when actually uploading a file - only one apth at a time
+    setPickStart(null);
+    setPickEnd(null);
+    setPickState('start');
     const reader = new FileReader();
     reader.onload = (ev) => {
       try {
@@ -1045,8 +1215,17 @@ function App() {
         distanceKm={distanceKm}
         elevationGain={totalAscent}
         selectedDate={selectedDate}
-        gpxError={gpxError}
+        gpxError={gpxError || (routeLoading ? 'Fetching route…' : null)}
         onZoomToRoute={handleZoomToRoute}
+        routeInputMode={routeInputMode}
+        onSetRouteInputMode={(mode) => {
+          setRouteInputMode(mode);
+          if (mode === 'pick') {
+            if (pickState === 'idle') setPickState('start');
+          }
+        }}
+        pickState={pickState}
+        onClearPick={handleClearPick}
       />
 
       {/* ─── Route Debug Panel (mouse-following) ─── */}
