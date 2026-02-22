@@ -9,6 +9,10 @@ https://preride.vercel.app/
 
 ## Features
 
+<p align="center">
+<img width="80%" alt="Screenshot 2026-02-19 at 9 32 45 PM" src="https://github.com/user-attachments/assets/594c779c-8c8f-4717-840b-991490dc81fb" />
+<img width="80%" alt="Screenshot 2026-02-19 at 10 15 52 PM" src="https://github.com/user-attachments/assets/fde5dd20-0521-431b-b891-510a2caa0580" />
+
 - Load and display GPX routes with start/finish markers
 - Per‑point wind arrows fetched from Open‑Meteo
 - 3D terrain view toggle
@@ -35,13 +39,6 @@ Downhills can reduce the total score
 **Minimum score** = 0
 
 Scores are normalized from 0–1 based on the hardest segment in the route
-
-
-<p align="center">
-<img width="80%" alt="Screenshot 2026-02-19 at 9 32 45 PM" src="https://github.com/user-attachments/assets/594c779c-8c8f-4717-840b-991490dc81fb" />
-<img width="80%" alt="Screenshot 2026-02-19 at 10 15 52 PM" src="https://github.com/user-attachments/assets/fde5dd20-0521-431b-b891-510a2caa0580" />
-
-
 
 ## Setup
 
