@@ -286,16 +286,6 @@ function App() {
   const [appReady, setAppReady] = useState(false);
   const [hideLoadingScreen, setHideLoadingScreen] = useState(false);
 
-  // Onboarding state
-  const [showOnboarding, setShowOnboarding] = useState(false);
-
-  // Lazily initialize onboarding state once on mount
-  useEffect(() => {
-    if (localStorage.getItem('preride_onboarding_seen') !== 'true') {
-      setShowOnboarding(true);
-    }
-  }, []);
-
   useEffect(() => {
     const handleRateLimit = (e: Event) => {
       const isLimited = (e as CustomEvent).detail;
@@ -354,12 +344,9 @@ function App() {
 
   // ── Application Ready Logic ───────────────────────────────────────────────
   useEffect(() => {
+    // ready
     if (appReady) return;
 
-    // We consider the app "ready" when:
-    // 1. The map style is loaded (mapReady is true)
-    // 2. We have route points loaded
-    // 3. We are no longer waiting for the initial wind data fetch
     if (mapReady && routeCoords.length > 0 && !windLoading) {
       setAppReady(true);
     }
@@ -995,7 +982,7 @@ function App() {
       {/* INITIAL LOADING SCREEN */}
       {!hideLoadingScreen && (
         <div className={`loading-screen ${appReady ? 'fade-out' : ''}`}>
-          <img src="/textlogo_white.png" alt="PreRide Logo" className="loading-logo" />
+          <img src="/logo_green.png" alt="PreRide Logo" className="loading-logo" style={{ width: '80px', height: 'auto' }} />
         </div>
       )}
 
@@ -1069,10 +1056,9 @@ function App() {
       </div>
 
       {/* ONBOARDING OVERLAY */}
-      {appReady && showOnboarding && (
+      {appReady && (
         <OnboardingOverlay
           onDismiss={() => {
-            setShowOnboarding(false);
             localStorage.setItem('preride_onboarding_seen', 'true');
           }}
         />

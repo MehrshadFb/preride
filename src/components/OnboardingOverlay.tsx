@@ -7,7 +7,6 @@ interface OnboardingOverlayProps {
 export default function OnboardingOverlay({ onDismiss }: OnboardingOverlayProps) {
     const [mounted, setMounted] = useState(false);
 
-    // Trigger a subtle fade-in after mounting
     useEffect(() => {
         requestAnimationFrame(() => {
             setMounted(true);
@@ -86,16 +85,16 @@ export default function OnboardingOverlay({ onDismiss }: OnboardingOverlayProps)
                     </svg>
                 </button>
 
-                <h2 style={{ marginTop: 0, marginBottom: '20px', fontSize: '24px', fontWeight: 700, letterSpacing: '-0.02em', textAlign: 'center' }}>
-                    PreRide
-                </h2>
+                <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', marginBottom: '20px' }}>
+                    <img src="/textlogo_white.png" alt="Logo" style={{ width: '20%', height: 'auto' }} />
+                </div>
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', fontSize: '15px', lineHeight: 1.6, color: '#cbd5e1' }}>
                     <p style={{ margin: 0 }}>
-                        Upload your own GPX or explore the sample route
+                        Upload your own cycling route GPX or explore the sample route
                     </p>
                     <p style={{ margin: 0 }}>
-                        Relative difficulty of each segment is calculated using upcoming elevation grades and wind info
+                        Relative difficulty of each segment using upcoming elevation grades and wind info is calculated and visually displayed
                     </p>
                     <p style={{ margin: 0 }}>
                         Use the time slider to forecast conditions for your specific planned ride time
@@ -108,7 +107,7 @@ export default function OnboardingOverlay({ onDismiss }: OnboardingOverlayProps)
                         marginTop: '28px',
                         width: '100%',
                         padding: '12px 24px',
-                        backgroundColor: '#9BDD4A', // Using the primary accent color
+                        backgroundColor: '#9BDD4A',
                         color: '#0f0f19',
                         border: 'none',
                         borderRadius: '8px',
